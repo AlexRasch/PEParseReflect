@@ -1,0 +1,22 @@
+[package]
+name = "Kernel32_PEB"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+
+
+[profile.dev]
+codegen-units = 1 # Allows LLVM to perform better optimization.
+lto = true # Enables link-time-optimizations.
+opt-level = 3 # Prioritizes small binary size. Use `3` if you prefer speed.
+panic = "abort" # Higher performance by disabling panic handlers.
+
+[profile.release]
+codegen-units = 1 # Allows LLVM to perform better optimization.
+lto = true # Enables link-time-optimizations.
+opt-level = "z" # Prioritizes small binary size. Use `3` if you prefer speed.
+panic = "abort" # Higher performance by disabling panic handlers.
+strip = true # Ensures debug symbols are removed.
+# Rustflags  sätts i .cargo\config.toml
