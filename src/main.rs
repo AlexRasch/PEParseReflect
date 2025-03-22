@@ -49,7 +49,9 @@ struct PEB {
 
 unsafe fn get_teb() -> *mut TEB {
     let teb: *mut TEB;
-    asm!("mov {}, gs:[0x30]", out(reg) teb);
+    unsafe {
+        asm!("mov {}, gs:[0x30]", out(reg) teb);
+    }
     teb
 }
 
@@ -86,15 +88,13 @@ fn get_kernel32_base() -> Option<*mut u8> {
             let name_slice = unsafe {
                 std::slice::from_raw_parts(name_ref.buffer, (name_ref.length / 2) as usize)
             };
-            let dll_name = from_wide(name_slice);
 
             let dll_name = from_wide(name_slice);
-            //println!("DLL: {}", dll_name);
+            println!("DLL: {}", dll_name);
             if dll_name.to_lowercase().contains("kernelbase") {
                 return Some(base);
             }
         }
-
         // Gå till nästa post i listan
         entry = unsafe { (*entry).flink };
 
@@ -207,17 +207,13 @@ struct IMAGE_EXPORT_DIRECTORY {
 
 fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
     unsafe {
-        // Step 1: Validate DOS header
         let dos_header = kernel32_base as *const IMAGE_DOS_HEADER;
-        if (*dos_header).e_magic != 0x5A4D {
-            println!("Invalid DOS magic");
+        if !validate_dos_header(dos_header) {
             return None;
         }
 
-        // Step 2: Validate e_lfanew
         let e_lfanew = (*dos_header).e_lfanew;
-        if e_lfanew < 0x40 || e_lfanew > 0x1000 {
-            println!("Invalid e_lfanew: {}", e_lfanew);
+        if !validate_e_lfanew(e_lfanew) {
             return None;
         }
 
@@ -242,12 +238,6 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
         }
 
         println!("Number of RVA and Sizes: {}", (*nt_headers).optional_header.number_of_rva_and_sizes);
-
-        // Logga hela data_directory-arrayen
-        //for i in 0..(*nt_headers).optional_header.number_of_rva_and_sizes as usize {
-        //    let dir = &(*nt_headers).optional_header.data_directory[i];
-        //    println!("Data Directory[{}]: RVA={:x}, Size={:x}", i, dir.virtual_address, dir.size);
-        //}
 
 
         // Step 6: Get export directory
@@ -315,10 +305,10 @@ type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32)
 
 fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
     unsafe {
+
         // Samma parsing-logik som för find_load_library
         let dos_header = user32_base as *const IMAGE_DOS_HEADER;
-        if (*dos_header).e_magic != 0x5A4D {
-            println!("Invalid DOS magic");
+        if !validate_dos_header(dos_header) {
             return None;
         }
 
@@ -439,8 +429,49 @@ pub extern "system" fn WinMain(
     }
 }
 
-/* --- Helpers ---*/
+/* --- PE Helpers ---*/
 
+/// Kollar efter MZ, vilket ska finnas i början på giltiga PE
+unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
+    if dos_header.is_null() {
+        #[cfg(debug_assertions)]
+        println!("Null DOS header pointer");
+        return false;
+    }
+
+    let magic = unsafe { (*dos_header).e_magic };
+    if magic == 0x5A4D {
+        return true;
+    }
+
+    #[cfg(debug_assertions)]
+    println!("Invalid DOS magic");
+    false
+}
+
+unsafe fn validate_e_lfanew(e_lfanew: i32) -> bool {
+    if e_lfanew < 0x40 || e_lfanew > 0x1000 {
+        #[cfg(debug_assertions)]
+        println!("Invalid e_lfanew: {}", e_lfanew);
+        return false;
+    }
+    true
+}
+
+/// Kollar efter 0x45(P) 0x50(E), så vi vet att vi ligger "rätt"
+unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
+    if (*nt_headers).signature != 0x4550 {
+        #[cfg(debug_assertions)]
+        println!("Invalid PE signature");
+        return false;
+    }
+    true
+}
+
+
+/* --- Helpers ---*/
 fn from_wide(slice: &[u16]) -> String {
     String::from_utf16(slice).unwrap_or_default()
 }
+
+
