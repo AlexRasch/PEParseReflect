@@ -55,7 +55,7 @@ unsafe fn get_teb() -> *mut TEB {
     teb
 }
 
-// Hämta PEB via TEB
+// Hämta PEB via TEB, tack Mario
 fn get_peb() -> *mut PEB {
     unsafe {
         let teb = get_teb();
@@ -207,44 +207,49 @@ struct IMAGE_EXPORT_DIRECTORY {
 
 fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
     unsafe {
+        // Step 1: Validate DOS header ("MZ" signature)
         let dos_header = kernel32_base as *const IMAGE_DOS_HEADER;
         if !validate_dos_header(dos_header) {
             return None;
         }
 
+        // Step 2: Validate e_lfanew (including alignment)
         let e_lfanew = (*dos_header).e_lfanew;
         if !validate_e_lfanew(e_lfanew) {
             return None;
         }
 
-        // Step 3: Calculate NT headers address and check alignment
+        // Step 3: Calculate and validate NT headers address
         let nt_headers_addr = (kernel32_base as usize).wrapping_add(e_lfanew as usize);
-        if nt_headers_addr % 4 != 0 {
-            println!("Misaligned NT headers address: {:x}", nt_headers_addr);
-            return None;
-        }
-
-        // Step 4: Validate NT headers
         let nt_headers = nt_headers_addr as *const IMAGE_NT_HEADERS;
-        if nt_headers.is_null() || (*nt_headers).signature != 0x4550 {
-            println!("Invalid PE signature or null pointer");
+
+        // Step 4: Validate PE signature and NT headers
+        if !validate_pe_signature(nt_headers) {
             return None;
         }
 
         // Step 5: Check architecture (PE32+ for 64-bit)
         if (*nt_headers).optional_header.magic != 0x20B {
-            println!("Not a 64-bit PE (PE32+) image: {:?}", (*nt_headers).optional_header.magic);
+            println!(
+                "Not a 64-bit PE (PE32+) image: {:?}",
+                (*nt_headers).optional_header.magic
+            );
             return None;
         }
 
-        println!("Number of RVA and Sizes: {}", (*nt_headers).optional_header.number_of_rva_and_sizes);
-
+        println!(
+            "Number of RVA and Sizes: {}",
+            (*nt_headers).optional_header.number_of_rva_and_sizes
+        );
 
         // Step 6: Get export directory
         let export_dir = &(*nt_headers).optional_header.data_directory[0];
         let export_table_rva = export_dir.virtual_address;
         let export_table_size = export_dir.size;
-        println!("Export dir RVA: {:x}, Size: {:x}", export_table_rva, export_table_size);
+        println!(
+            "Export dir RVA: {:x}, Size: {:x}",
+            export_table_rva, export_table_size
+        );
         if export_table_rva == 0 || export_table_size == 0 {
             println!("No export directory found");
             return None;
@@ -266,9 +271,12 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
         }
 
         // Step 9: Get pointers to names, ordinals, and functions
-        let name_ptrs = (kernel32_base as usize + (*export_table).address_of_names as usize) as *const u32;
-        let ordinals = (kernel32_base as usize + (*export_table).address_of_name_ordinals as usize) as *const u16;
-        let functions = (kernel32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
+        let name_ptrs =
+            (kernel32_base as usize + (*export_table).address_of_names as usize) as *const u32;
+        let ordinals = (kernel32_base as usize + (*export_table).address_of_name_ordinals as usize)
+            as *const u16;
+        let functions =
+            (kernel32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
 
         // Step 10: Search for LoadLibraryA
         for i in 0..number_of_names {
@@ -288,7 +296,6 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
     None
 }
 
-
 /*-- Use LoadLibrary ---*/
 type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
 
@@ -305,14 +312,14 @@ type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32)
 
 fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
     unsafe {
-
         // Samma parsing-logik som för find_load_library
         let dos_header = user32_base as *const IMAGE_DOS_HEADER;
         if !validate_dos_header(dos_header) {
             return None;
         }
 
-        let nt_headers = (user32_base as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+        let nt_headers =
+            (user32_base as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
         if (*nt_headers).signature != 0x4550 {
             println!("Invalid PE signature");
             return None;
@@ -326,10 +333,14 @@ fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
             return None;
         }
 
-        let export_table = (user32_base as usize + export_table_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
-        let name_ptrs = (user32_base as usize + (*export_table).address_of_names as usize) as *const u32;
-        let ordinals = (user32_base as usize + (*export_table).address_of_name_ordinals as usize) as *const u16;
-        let functions = (user32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
+        let export_table =
+            (user32_base as usize + export_table_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
+        let name_ptrs =
+            (user32_base as usize + (*export_table).address_of_names as usize) as *const u32;
+        let ordinals = (user32_base as usize + (*export_table).address_of_name_ordinals as usize)
+            as *const u16;
+        let functions =
+            (user32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
 
         for i in 0..(*export_table).number_of_names {
             let name_rva = *name_ptrs.add(i as usize);
@@ -356,7 +367,6 @@ fn call_message_box(message_box_addr: *mut u8) {
     }
 }
 
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 #[warn(unused_variables)]
@@ -366,7 +376,6 @@ pub extern "system" fn WinMain(
     _lpCmdLine: *const u8,
     _nCmdShow: i32,
 ) -> i32 {
-
     // Hitta kernel32.dll base address
     let kernel32_base = match get_kernel32_base() {
         Some(base) => {
@@ -400,12 +409,11 @@ pub extern "system" fn WinMain(
         println!("Failed to load {}", dll_path);
     }
 
-
     // Anropar MessageBoxA från user32.dll
     let dll_path = "user32.dll";
     let dll_handle = call_load_library(load_library, dll_path);
     if !dll_handle.is_null() {
-        println!("Loaded {} at {:?}", dll_path, dll_handle);
+        println!("Dll loaded {} at {:?}", dll_path, dll_handle);
 
         // Hitta MessageBoxA
         let message_box = match find_message_box(dll_handle) {
@@ -431,7 +439,13 @@ pub extern "system" fn WinMain(
 
 /* --- PE Helpers ---*/
 
-/// Kollar efter MZ, vilket ska finnas i början på giltiga PE
+/// Validates the DOS header by checking for the "MZ" signature (0x5A4D) at the beginning of a valid PE file.
+///
+/// ## Parameters
+/// - `dos_header`: A pointer to the `IMAGE_DOS_HEADER` structure to validate.
+///
+/// ## Returns
+/// Returns `true` if the DOS header is valid (contains "MZ" signature), otherwise `false`.
 unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
     if dos_header.is_null() {
         #[cfg(debug_assertions)]
@@ -449,29 +463,53 @@ unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
     false
 }
 
+/// Validates the e_lfanew field, ensuring it is within a reasonable range and properly aligned for NT headers.
+///
+/// ## Parameters
+/// - `e_lfanew`: The offset (in bytes) from the beginning of the file to the start of the NT headers.
+///
+/// ## Returns
+/// Returns `true` if the e_lfanew is valid and properly aligned, otherwise `false`.
 unsafe fn validate_e_lfanew(e_lfanew: i32) -> bool {
+    // Se till att e_lfanew är positiv och inom rimligt intervall
     if e_lfanew < 0x40 || e_lfanew > 0x1000 {
         #[cfg(debug_assertions)]
         println!("Invalid e_lfanew: {}", e_lfanew);
         return false;
     }
-    true
-}
-
-/// Kollar efter 0x45(P) 0x50(E), så vi vet att vi ligger "rätt"
-unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
-    if (*nt_headers).signature != 0x4550 {
+    // Kontrollera 4-byte alignment
+    if e_lfanew % 4 != 0 {
         #[cfg(debug_assertions)]
-        println!("Invalid PE signature");
+        println!("Misaligned e_lfanew: {}", e_lfanew);
         return false;
     }
     true
 }
 
+/// Validates the PE signature by checking for "PE" (0x4550) to confirm the correct position in the file.
+///
+/// ## Parameters
+/// - `nt_headers`: A pointer to the `IMAGE_NT_HEADERS` structure to validate.
+///
+/// ## Returns
+/// Returns `true` if the PE signature is valid, otherwise `false`.
+unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
+    if nt_headers.is_null() {
+        #[cfg(debug_assertions)]
+        println!("Null NT headers");
+        return false;
+    }
+    unsafe {
+        if (*nt_headers).signature != 0x4550 {
+            #[cfg(debug_assertions)]
+            println!("Invalid PE signature");
+            return false;
+        }
+    }
+    true
+}
 
 /* --- Helpers ---*/
 fn from_wide(slice: &[u16]) -> String {
     String::from_utf16(slice).unwrap_or_default()
 }
-
-
