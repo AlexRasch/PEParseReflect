@@ -8,15 +8,15 @@ edition = "2024"
 
 
 [profile.dev]
-codegen-units = 1 # Allows LLVM to perform better optimization.
-lto = true # Enables link-time-optimizations.
-opt-level = 3 # Prioritizes small binary size. Use `3` if you prefer speed.
-panic = "abort" # Higher performance by disabling panic handlers.
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
 
 [profile.release]
-codegen-units = 1 # Allows LLVM to perform better optimization.
-lto = true # Enables link-time-optimizations.
-opt-level = "z" # Prioritizes small binary size. Use `3` if you prefer speed.
-panic = "abort" # Higher performance by disabling panic handlers.
-strip = true # Ensures debug symbols are removed.
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true
 # Rustflags  sätts i .cargo\config.toml
