@@ -229,13 +229,9 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
         }
 
         // Step 5: Check architecture (PE32+ for 64-bit)
-        if (*nt_headers).optional_header.magic != 0x20B {
-            println!(
-                "Not a 64-bit PE (PE32+) image: {:?}",
-                (*nt_headers).optional_header.magic
-            );
-            return None;
-        }
+       if !validate_pe64(nt_headers) {
+           return None;
+       }
 
         println!(
             "Number of RVA and Sizes: {}",
@@ -508,6 +504,25 @@ unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
     }
     true
 }
+
+/// Checks if the PE file is 64-bit (PE32+ format) by validating optional_header.magic.
+///
+/// ## Parameters
+/// - `nt_headers`: A pointer to the `IMAGE_NT_HEADERS` structure to validate.
+///
+/// ## Returns
+/// - `true` if the PE file is 64-bit (PE32+).
+/// - `false` if the pointer is null or the magic value is incorrect.
+unsafe fn validate_pe64(nt_headers : *const IMAGE_NT_HEADERS) -> bool {
+    if nt_headers.is_null(){
+        println!("Null NT headers");
+        return false;
+    }
+    unsafe {
+        return (*nt_headers).optional_header.magic == 0x20B;
+    }
+}
+
 
 /* --- Helpers ---*/
 fn from_wide(slice: &[u16]) -> String {
