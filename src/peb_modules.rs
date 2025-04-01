@@ -8,6 +8,12 @@ struct LIST_ENTRY {
 }
 
 #[repr(C)]
+pub struct UNICODE_STRING {
+    length: u16,
+    maximum_length: u16,
+    buffer: *mut u16,
+}
+#[repr(C)]
 struct LDR_DATA_TABLE_ENTRY {
     in_load_order_links: LIST_ENTRY,
     in_memory_order_links: LIST_ENTRY,
@@ -15,8 +21,8 @@ struct LDR_DATA_TABLE_ENTRY {
     dll_base: *mut u8,
     entry_point: *mut u8,
     size_of_image: u32,
-    full_dll_name: helpers::UNICODE_STRING,
-    base_dll_name: helpers::UNICODE_STRING,
+    full_dll_name: UNICODE_STRING,
+    base_dll_name: UNICODE_STRING,
 }
 
 #[repr(C)]
