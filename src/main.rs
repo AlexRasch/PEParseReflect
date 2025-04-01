@@ -2,6 +2,9 @@
 //#![no_std]
 
 use core::arch::asm;
+use core::slice;
+use core::ptr;
+
 
 // Strukturer
 #[repr(C)]
@@ -63,36 +66,39 @@ fn get_peb() -> *mut PEB {
     }
 }
 
-// Hämta basadressen för kernel32.dll
-fn get_kernel32_base() -> Option<*mut u8> {
+fn get_module_bases() -> (Option<*mut u8>, Option<*mut u8>) {
     let peb = get_peb();
     let ldr = unsafe { (*peb).ldr };
 
     if ldr.is_null() {
         println!("LDR is null");
-        return None;
+        return (None,None);
     }
 
-    // Starta från första posten i `in_memory_order_module_list`
+    // Start from first post inside `in_memory_order_module_list`
     let mut entry = unsafe { (*ldr).in_memory_order_module_list.flink };
-    let list_head = entry; // Behövs för att bryta loopen
+    let list_head = entry;
+
+    let mut ntdll_base: Option<*mut u8> = None;
+    let mut kernelbase_base: Option<*mut u8> = None;
 
     while !entry.is_null() {
         let ldr_entry = entry as *mut LDR_DATA_TABLE_ENTRY;
-
         let base = unsafe { (*ldr_entry).dll_base };
         let name_ref = unsafe { &(*ldr_entry).base_dll_name };
 
         if !name_ref.buffer.is_null() {
             // Konvertera UNICODE_STRING till en Rust-sträng
             let name_slice = unsafe {
-                std::slice::from_raw_parts(name_ref.buffer, (name_ref.length / 2) as usize)
+                core::slice::from_raw_parts(name_ref.buffer, (name_ref.length / 2) as usize)
             };
 
             let dll_name = from_wide(name_slice);
-            println!("DLL: {}", dll_name);
+            println!("Module: {}", dll_name);
             if dll_name.to_lowercase().contains("kernelbase") {
-                return Some(base);
+                kernelbase_base = Some(base);
+            }else if dll_name.to_lowercase().contains("ntdll") {
+                ntdll_base = Some(base);
             }
         }
         // Gå till nästa post i listan
@@ -104,7 +110,7 @@ fn get_kernel32_base() -> Option<*mut u8> {
         }
     }
 
-    None
+    (ntdll_base, kernelbase_base)
 }
 
 /* --- Hämta LoadLibrary --- */
@@ -233,10 +239,8 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
            return None;
        }
 
-        println!(
-            "Number of RVA and Sizes: {}",
-            (*nt_headers).optional_header.number_of_rva_and_sizes
-        );
+        #[cfg(debug_assertions)]
+        println!("Number of RVA and Sizes: {}", (*nt_headers).optional_header.number_of_rva_and_sizes);
 
         // Step 6: Get export directory
         let export_dir = &(*nt_headers).optional_header.data_directory[0];
@@ -278,7 +282,7 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
         for i in 0..number_of_names {
             let name_rva = *name_ptrs.add(i as usize);
             let name_addr = (kernel32_base as usize + name_rva as usize) as *const i8;
-            let name_str = std::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
+            let name_str = core::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
 
             if name_str == "LoadLibraryA" {
                 let ordinal = *ordinals.add(i as usize) as usize;
@@ -290,17 +294,6 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
     }
     println!("LoadLibraryA not found in export table");
     None
-}
-
-/*-- Use LoadLibrary ---*/
-type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
-
-fn call_load_library(load_library_addr: *mut u8, dll_path: &str) -> *mut u8 {
-    unsafe {
-        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
-        let dll_path_c = std::ffi::CString::new(dll_path).unwrap();
-        load_library(dll_path_c.as_ptr())
-    }
 }
 
 /* --- MessageBoxA --- */
@@ -341,7 +334,7 @@ fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
         for i in 0..(*export_table).number_of_names {
             let name_rva = *name_ptrs.add(i as usize);
             let name_addr = (user32_base as usize + name_rva as usize) as *const i8;
-            let name_str = std::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
+            let name_str = core::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
             if name_str == "MessageBoxA" {
                 let ordinal = *ordinals.add(i as usize) as usize;
                 let func_rva = *functions.add(ordinal);
@@ -359,7 +352,7 @@ fn call_message_box(message_box_addr: *mut u8) {
         let message_box: MessageBoxA = core::mem::transmute(message_box_addr);
         let caption = std::ffi::CString::new("Hello").unwrap();
         let message = std::ffi::CString::new("World").unwrap();
-        message_box(std::ptr::null_mut(), message.as_ptr(), caption.as_ptr(), 0);
+        message_box(core::ptr::null_mut(), message.as_ptr(), caption.as_ptr(), 0);
     }
 }
 
@@ -372,20 +365,15 @@ pub extern "system" fn WinMain(
     _lpCmdLine: *const u8,
     _nCmdShow: i32,
 ) -> i32 {
-    // Hitta kernel32.dll base address
-    let kernel32_base = match get_kernel32_base() {
-        Some(base) => {
-            println!("kernel32.dll base address: {:?}", base);
-            base
-        }
-        None => {
-            println!("Failed to find kernel32.dll");
-            return 0;
-        }
-    };
+    // Get the base addresses of ntdll.dll and kernelbase.dll
+    let (ntdll_base, kernelbase_base) = get_module_bases();
 
-    // Hitta LoadLibraryA från kernel32.dll
-    let load_library = match find_load_library(kernel32_base) {
+    // Ensure we always have valid pointers (convert None to NULL)
+    let ntdll_base = ntdll_base.unwrap_or(std::ptr::null_mut());
+    let kernelbase_base = kernelbase_base.unwrap_or(core::ptr::null_mut());
+
+    // Locate the address of LoadLibraryA within kernelbase.dll
+    let load_library = match find_load_library(kernelbase_base) {
         Some(addr) => {
             println!("LoadLibraryA address: {:?}", addr);
             addr
@@ -523,6 +511,17 @@ unsafe fn validate_pe64(nt_headers : *const IMAGE_NT_HEADERS) -> bool {
     }
 }
 
+
+/*-- Use LoadLibrary ---*/
+type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
+
+fn call_load_library(load_library_addr: *mut u8, dll_path: &str) -> *mut u8 {
+    unsafe {
+        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
+        let dll_path_c = std::ffi::CString::new(dll_path).unwrap();
+        load_library(dll_path_c.as_ptr())
+    }
+}
 
 /* --- Helpers ---*/
 fn from_wide(slice: &[u16]) -> String {

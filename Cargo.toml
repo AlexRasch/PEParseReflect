@@ -19,4 +19,4 @@ lto = true
 opt-level = "z"
 panic = "abort"
 strip = true
-# Rustflags  sätts i .cargo\config.toml
+# Rustflags  are defined inside .cargo\config.toml
