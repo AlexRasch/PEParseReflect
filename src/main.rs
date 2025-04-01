@@ -7,19 +7,6 @@ mod peb_modules;
 mod pe_helper;
 mod helpers;
 
-
-// Strukturer
-
-
-
-
-
-
-
-
-
-
-
 /* --- Hämta LoadLibrary --- */
 
 #[repr(C)]

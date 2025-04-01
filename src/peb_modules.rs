@@ -88,9 +88,7 @@ pub fn get_module_bases() -> (Option<*mut u8>, Option<*mut u8>) {
 fn get_peb() -> *mut PEB {
     unsafe {
         let teb: *mut TEB;
-        unsafe {
-            asm!("mov {}, gs:[0x30]", out(reg) teb);
-        }
+        asm!("mov {}, gs:[0x30]", out(reg) teb);
         (*teb).process_environment_block
     }
 }
