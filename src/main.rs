@@ -211,97 +211,8 @@ struct IMAGE_EXPORT_DIRECTORY {
     address_of_name_ordinals: u32,
 }
 
-fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
-    unsafe {
-        // Step 1: Validate DOS header ("MZ" signature)
-        let dos_header = kernel32_base as *const IMAGE_DOS_HEADER;
-        if !validate_dos_header(dos_header) {
-            return None;
-        }
-
-        // Step 2: Validate e_lfanew (including alignment)
-        let e_lfanew = (*dos_header).e_lfanew;
-        if !validate_e_lfanew(e_lfanew) {
-            return None;
-        }
-
-        // Step 3: Calculate and validate NT headers address
-        let nt_headers_addr = (kernel32_base as usize).wrapping_add(e_lfanew as usize);
-        let nt_headers = nt_headers_addr as *const IMAGE_NT_HEADERS;
-
-        // Step 4: Validate PE signature and NT headers
-        if !validate_pe_signature(nt_headers) {
-            return None;
-        }
-
-        // Step 5: Check architecture (PE32+ for 64-bit)
-       if !validate_pe64(nt_headers) {
-           return None;
-       }
-
-        #[cfg(debug_assertions)]
-        println!("Number of RVA and Sizes: {}", (*nt_headers).optional_header.number_of_rva_and_sizes);
-
-        // Step 6: Get export directory
-        let export_dir = &(*nt_headers).optional_header.data_directory[0];
-        let export_table_rva = export_dir.virtual_address;
-        let export_table_size = export_dir.size;
-        println!(
-            "Export dir RVA: {:x}, Size: {:x}",
-            export_table_rva, export_table_size
-        );
-        if export_table_rva == 0 || export_table_size == 0 {
-            println!("No export directory found");
-            return None;
-        }
-
-        // Step 7: Calculate export table address
-        let export_table_addr = (kernel32_base as usize).wrapping_add(export_table_rva as usize);
-        if export_table_addr % 4 != 0 {
-            println!("Misaligned export table address: {:x}", export_table_addr);
-            return None;
-        }
-        let export_table = export_table_addr as *const IMAGE_EXPORT_DIRECTORY;
-
-        // Step 8: Validate export table fields
-        let number_of_names = (*export_table).number_of_names;
-        if number_of_names == 0 {
-            println!("No exported names");
-            return None;
-        }
-
-        // Step 9: Get pointers to names, ordinals, and functions
-        let name_ptrs =
-            (kernel32_base as usize + (*export_table).address_of_names as usize) as *const u32;
-        let ordinals = (kernel32_base as usize + (*export_table).address_of_name_ordinals as usize)
-            as *const u16;
-        let functions =
-            (kernel32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
-
-        // Step 10: Search for LoadLibraryA
-        for i in 0..number_of_names {
-            let name_rva = *name_ptrs.add(i as usize);
-            let name_addr = (kernel32_base as usize + name_rva as usize) as *const i8;
-            let name_str = core::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
-
-            if name_str == "LoadLibraryA" {
-                let ordinal = *ordinals.add(i as usize) as usize;
-                let func_rva = *functions.add(ordinal);
-                let func_addr = (kernel32_base as usize + func_rva as usize) as *mut u8;
-                return Some(func_addr);
-            }
-        }
-    }
-    println!("LoadLibraryA not found in export table");
-    None
-}
-
 /* --- MessageBoxA --- */
 type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32) -> i32;
-
-fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
-    resolve_function(user32_base, "MessageBoxA")
-}
 
 fn call_message_box(message_box_addr: *mut u8) {
     unsafe {
@@ -329,7 +240,7 @@ pub extern "system" fn WinMain(
     let kernelbase_base = kernelbase_base.unwrap_or(core::ptr::null_mut());
 
     // Locate the address of LoadLibraryA within kernelbase.dll
-    let load_library = match find_load_library(kernelbase_base) {
+    let load_library = match resolve_function(kernelbase_base, "LoadLibraryA")  {
         Some(addr) => {
             println!("LoadLibraryA address: {:?}", addr);
             addr
@@ -350,13 +261,12 @@ pub extern "system" fn WinMain(
     }
 
     // Anropar MessageBoxA från user32.dll
-    let dll_path = "user32.dll";
     let dll_handle = call_load_library(load_library, dll_path);
     if !dll_handle.is_null() {
         println!("Dll loaded {} at {:?}", dll_path, dll_handle);
 
         // Hitta MessageBoxA
-        let message_box = match find_message_box(dll_handle) {
+        let message_box = match resolve_function(dll_handle, "MessageBoxA")  {
             Some(addr) => {
                 println!("MessageBoxA address: {:?}", addr);
                 addr
@@ -379,7 +289,20 @@ pub extern "system" fn WinMain(
 
 /* --- PE Helpers ---*/
 
-/// Finds function inside export section
+/// Resolves the address of a function by searching the export section of a PE module.
+///
+/// This function locates the export directory in the PE file, iterates through the exported
+/// function names, and compares each with the provided `func_name`. If a match is found,
+/// it returns the address of the corresponding function. If the function is not found,
+/// it returns `None`.
+///
+/// # Arguments
+/// - `module_base`: A pointer to the base address of the loaded module.
+/// - `func_name`: The name of the function to resolve in the export table.
+///
+/// # Returns
+/// - `Some(*mut u8)`: The address of the resolved function, if found.
+/// - `None`: If the function could not be found in the export table.
 fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<*mut u8> {
     unsafe {
         let dos_header = module_base as *const IMAGE_DOS_HEADER;
@@ -428,7 +351,6 @@ fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<*mut u8> {
     println!("{} not found", func_name);
     None
 }
-
 
 /// Validates if the given module base points to a well-formed 64-bit PE (Portable Executable) file.
 ///
@@ -558,7 +480,6 @@ unsafe fn validate_pe64(nt_headers : *const IMAGE_NT_HEADERS) -> bool {
         return (*nt_headers).optional_header.magic == 0x20B;
     }
 }
-
 
 /*-- Use LoadLibrary ---*/
 type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
