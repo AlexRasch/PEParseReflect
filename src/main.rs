@@ -9,6 +9,7 @@ mod peb_modules;
 mod pe_helper;
 mod helpers;
 mod win_api;
+mod types;
 /* --- Hämta LoadLibrary --- */
 
 #[repr(C)]
@@ -107,33 +108,6 @@ struct IMAGE_EXPORT_DIRECTORY {
     address_of_name_ordinals: u32,
 }
 
-/*-- Use LoadLibrary ---*/
-type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
-
-fn call_load_library(load_library_addr: *mut u8, dll_path: &[u8]) -> *mut u8 {
-    unsafe {
-        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
-        load_library(dll_path.as_ptr() as *const i8)
-    }
-}
-
-
-/* --- MessageBoxA --- */
-type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32) -> i32;
-
-fn call_message_box(message_box_addr: *mut u8) {
-    unsafe {
-        let message_box: MessageBoxA = core::mem::transmute(message_box_addr);
-        static CAPTION: &[u8] = b"Hello\0";
-        static MESSAGE: &[u8] = b"World\0";
-        message_box(core::ptr::null_mut(),
-                    MESSAGE.as_ptr() as *const i8,
-                    CAPTION.as_ptr() as *const i8,
-                    0
-        );
-    }
-}
-
 static mut KERNEL_BASE: *mut u8 = ptr::null_mut();
 static mut NT_DLL_BASE: *mut u8 = ptr::null_mut();
 
@@ -155,8 +129,6 @@ pub extern "system" fn WinMain(
         NT_DLL_BASE = ntdll_base.unwrap_or(core::ptr::null_mut());
         KERNEL_BASE = kernelbase_base.unwrap_or(core::ptr::null_mut());
 
-
-
         // Locate the address of LoadLibraryA within kernelbase.dll
         let load_library = match pe_helper::resolve_function(KERNEL_BASE, "LoadLibraryA") {
             Some(addr) => {
@@ -169,16 +141,20 @@ pub extern "system" fn WinMain(
             }
         };
 
-        // Använd LoadLibraryA för att ladda en DLL (User32 för MessageBoxA)
-        let dll_path: &[u8] = b"user32.dll\0";
-        let dll_handle = call_load_library(load_library, dll_path);
-        if !dll_handle.is_null() {
-            //println!("Loaded {} at {:?}", dll_path, dll_handle);
-        } else {
-            //println!("Failed to load {}", dll_path);
+        // Locate the address of NtCreateFile within ntdll.dll
+        let ntcreatefile = match pe_helper::resolve_function(NT_DLL_BASE, "NtCreateFile") {
+            Some(addr) => addr,
+            None => return -1,
+        };
+        // Create a file using  NtCreateFile
+        let status = create_file(ntcreatefile, NT_DLL_BASE);
+        if status != 0 {
+            return status; // Return NTSTATUS if we fail
         }
 
+
         // Anropar MessageBoxA från user32.dll
+        let dll_path: &[u8] = b"user32.dll\0";
         let dll_handle = call_load_library(load_library, dll_path);
         if !dll_handle.is_null() {
             //println!("Dll loaded {} at {:?}", dll_path, dll_handle);
@@ -203,6 +179,142 @@ pub extern "system" fn WinMain(
             //println!("Failed to load {}", dll_path);
             return 0;
         }
+
+
+    }
+}
+
+/*-- Use LoadLibrary ---*/
+type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
+
+fn call_load_library(load_library_addr: *mut u8, dll_path: &[u8]) -> *mut u8 {
+    unsafe {
+        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
+        load_library(dll_path.as_ptr() as *const i8)
+    }
+}
+
+/* -- NtCreateFile -- */
+// Konstanter för NtCreateFile
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+const FILE_SHARE_READ: u32 = 0x1;
+const FILE_SHARE_WRITE: u32 = 0x2;
+const FILE_CREATE: u32 = 0x2;
+const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x20;
+const GENERIC_READ: u32 = 0x80000000;
+const GENERIC_WRITE: u32 = 0x40000000;
+const SYNCHRONIZE: u32 = 0x00100000;
+
+// Structs för NtCreateFile
+
+#[repr(C)]
+struct OBJECT_ATTRIBUTES {
+    length: u32,
+    root_directory: *mut u8,
+    object_name: *mut types::UNICODE_STRING,
+    attributes: u32,
+    security_descriptor: *mut u8,
+    security_quality_of_service: *mut u8,
+}
+
+#[repr(C)]
+struct IO_STATUS_BLOCK {
+    status: i32, // NTSTATUS
+    information: usize,
+}
+
+type NtCreateFile = unsafe extern "system" fn(
+    *mut *mut u8,           // FileHandle
+    u32,                    // DesiredAccess
+    *mut OBJECT_ATTRIBUTES, // ObjectAttributes
+    *mut IO_STATUS_BLOCK,   // IoStatusBlock
+    *mut i64,               // AllocationSize
+    u32,                    // FileAttributes
+    u32,                    // ShareAccess
+    u32,                    // CreateDisposition
+    u32,                    // CreateOptions
+    *mut u8,                // EaBuffer
+    u32,                    // EaLength
+) -> i32; // NTSTATUS
+
+fn create_file(ntcreatefile_addr: *mut u8, ntdll_base: *mut u8) -> i32 {
+    unsafe {
+        let ntcreatefile: NtCreateFile = core::mem::transmute(ntcreatefile_addr);
+
+        // Filename as UTF-16: "\??\C:\test.txt"
+        static FILE_PATH: &[u16] = &[
+            b'\\' as u16, b'?' as u16, b'?' as u16, b'\\' as u16,
+            b'C' as u16, b':' as u16, b'\\' as u16,
+            b't' as u16, b'e' as u16, b's' as u16, b't' as u16,
+            b'.' as u16, b't' as u16, b'x' as u16, b't' as u16, 0u16
+        ];
+
+        // Sätt upp UNICODE_STRING
+        let mut unicode_string = types::UNICODE_STRING {
+            length: (FILE_PATH.len() - 1) as u16 * 2, // Längd i bytes, exkl. null
+            maximum_length: FILE_PATH.len() as u16 * 2,
+            buffer: FILE_PATH.as_ptr() as *mut u16,
+        };
+
+        // Sätt upp OBJECT_ATTRIBUTES
+        let mut object_attributes = OBJECT_ATTRIBUTES {
+            length: core::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+            root_directory: core::ptr::null_mut(),
+            object_name: &mut unicode_string,
+            attributes: 0x40, // OBJ_CASE_INSENSITIVE
+            security_descriptor: core::ptr::null_mut(),
+            security_quality_of_service: core::ptr::null_mut(),
+        };
+
+        // Sätt upp IO_STATUS_BLOCK
+        let mut io_status_block = IO_STATUS_BLOCK {
+            status: 0,
+            information: 0,
+        };
+
+        let mut file_handle: *mut u8 = core::ptr::null_mut();
+
+        // Call NtCreateFile
+        let status = ntcreatefile(
+            &mut file_handle,                          // FileHandle
+            GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE, // DesiredAccess
+            &mut object_attributes,                    // ObjectAttributes
+            &mut io_status_block,                      // IoStatusBlock
+            core::ptr::null_mut(),                     // AllocationSize
+            FILE_ATTRIBUTE_NORMAL,                     // FileAttributes
+            FILE_SHARE_READ | FILE_SHARE_WRITE,        // ShareAccess
+            FILE_CREATE,                               // CreateDisposition
+            FILE_SYNCHRONOUS_IO_NONALERT,              // CreateOptions
+            core::ptr::null_mut(),                     // EaBuffer
+            0,                                         // EaLength
+        );
+
+        // Om det lyckades (status == 0), stäng handtaget (vi behöver inte det)
+        if status == 0 {
+            // ToDo
+            // Vi skulle kunna använda NtClose från ntdll.dll för att stänga handtaget,
+            // men för enkelhetens skull skippar vi det i denna PoC.
+        }
+
+        status
+    }
+}
+
+
+
+/* --- MessageBoxA --- */
+type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32) -> i32;
+
+fn call_message_box(message_box_addr: *mut u8) {
+    unsafe {
+        let message_box: MessageBoxA = core::mem::transmute(message_box_addr);
+        static CAPTION: &[u8] = b"Hello\0";
+        static MESSAGE: &[u8] = b"World\0";
+        message_box(core::ptr::null_mut(),
+                    MESSAGE.as_ptr() as *const i8,
+                    CAPTION.as_ptr() as *const i8,
+                    0
+        );
     }
 }
 

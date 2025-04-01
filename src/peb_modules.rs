@@ -1,5 +1,5 @@
 use core::arch::asm;
-use crate::{helpers,win_api};
+use crate::{helpers,win_api, types};
 
 #[repr(C)]
 struct LIST_ENTRY {
@@ -7,12 +7,7 @@ struct LIST_ENTRY {
     blink: *mut LIST_ENTRY,
 }
 
-#[repr(C)]
-pub struct UNICODE_STRING {
-    length: u16,
-    maximum_length: u16,
-    buffer: *mut u16,
-}
+
 #[repr(C)]
 struct LDR_DATA_TABLE_ENTRY {
     in_load_order_links: LIST_ENTRY,
@@ -21,8 +16,8 @@ struct LDR_DATA_TABLE_ENTRY {
     dll_base: *mut u8,
     entry_point: *mut u8,
     size_of_image: u32,
-    full_dll_name: UNICODE_STRING,
-    base_dll_name: UNICODE_STRING,
+    full_dll_name: types::UNICODE_STRING,
+    base_dll_name: types::UNICODE_STRING,
 }
 
 #[repr(C)]
