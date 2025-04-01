@@ -300,51 +300,7 @@ fn find_load_library(kernel32_base: *mut u8) -> Option<*mut u8> {
 type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32) -> i32;
 
 fn find_message_box(user32_base: *mut u8) -> Option<*mut u8> {
-    unsafe {
-        // Samma parsing-logik som för find_load_library
-        let dos_header = user32_base as *const IMAGE_DOS_HEADER;
-        if !validate_dos_header(dos_header) {
-            return None;
-        }
-
-        let nt_headers =
-            (user32_base as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
-        if (*nt_headers).signature != 0x4550 {
-            println!("Invalid PE signature");
-            return None;
-        }
-
-        let export_dir = &(*nt_headers).optional_header.data_directory[0];
-        let export_table_rva = export_dir.virtual_address;
-        let export_table_size = export_dir.size;
-        if export_table_rva == 0 || export_table_size == 0 {
-            println!("No export directory found");
-            return None;
-        }
-
-        let export_table =
-            (user32_base as usize + export_table_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
-        let name_ptrs =
-            (user32_base as usize + (*export_table).address_of_names as usize) as *const u32;
-        let ordinals = (user32_base as usize + (*export_table).address_of_name_ordinals as usize)
-            as *const u16;
-        let functions =
-            (user32_base as usize + (*export_table).address_of_functions as usize) as *const u32;
-
-        for i in 0..(*export_table).number_of_names {
-            let name_rva = *name_ptrs.add(i as usize);
-            let name_addr = (user32_base as usize + name_rva as usize) as *const i8;
-            let name_str = core::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
-            if name_str == "MessageBoxA" {
-                let ordinal = *ordinals.add(i as usize) as usize;
-                let func_rva = *functions.add(ordinal);
-                let func_addr = (user32_base as usize + func_rva as usize) as *mut u8;
-                return Some(func_addr);
-            }
-        }
-    }
-    println!("MessageBoxA not found");
-    None
+    resolve_function(user32_base, "MessageBoxA")
 }
 
 fn call_message_box(message_box_addr: *mut u8) {
@@ -422,6 +378,97 @@ pub extern "system" fn WinMain(
 }
 
 /* --- PE Helpers ---*/
+
+/// Finds function inside export section
+fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<*mut u8> {
+    unsafe {
+        let dos_header = module_base as *const IMAGE_DOS_HEADER;
+        let nt_headers_addr = (module_base as usize).wrapping_add((*dos_header).e_lfanew as usize);
+        let nt_headers = nt_headers_addr as *const IMAGE_NT_HEADERS;
+
+        let export_dir = &(*nt_headers).optional_header.data_directory[0];
+        if export_dir.virtual_address == 0 || export_dir.size == 0 {
+            #[cfg(debug_assertions)]
+            println!("No export directory found");
+            return None;
+        }
+
+        let export_table_addr = (module_base as usize).wrapping_add(export_dir.virtual_address as usize);
+        if export_table_addr % 4 != 0 {
+            #[cfg(debug_assertions)]
+            println!("Misaligned export table address: {:x}", export_table_addr);
+            return None;
+        }
+        let export_table = export_table_addr as *const IMAGE_EXPORT_DIRECTORY;
+
+        let number_of_names = (*export_table).number_of_names;
+        if number_of_names == 0 {
+            #[cfg(debug_assertions)]
+            println!("No exported names");
+            return None;
+        }
+
+        let name_ptrs = (module_base as usize + (*export_table).address_of_names as usize) as *const u32;
+        let ordinals = (module_base as usize + (*export_table).address_of_name_ordinals as usize) as *const u16;
+        let functions = (module_base as usize + (*export_table).address_of_functions as usize) as *const u32;
+
+        for i in 0..(*export_table).number_of_names {
+            let name_rva = *name_ptrs.add(i as usize);
+            let name_addr = (module_base as usize + name_rva as usize) as *const i8;
+            let name_str = core::ffi::CStr::from_ptr(name_addr).to_str().unwrap_or("");
+
+            if name_str == func_name {
+                let ordinal = *ordinals.add(i as usize) as usize;
+                let func_rva = *functions.add(ordinal);
+                let func_addr = (module_base as usize + func_rva as usize) as *mut u8;
+                return Some(func_addr);
+            }
+        }
+    }
+    println!("{} not found", func_name);
+    None
+}
+
+
+/// Validates if the given module base points to a well-formed 64-bit PE (Portable Executable) file.
+///
+/// This function performs the following checks:
+/// 1. Validates that the DOS header contains the "MZ" signature.
+/// 2. Ensures that the e_lfanew field is correctly set and aligned.
+/// 3. Validates the NT headers and checks for the "PE" signature.
+/// 4. Confirms that the file is a 64-bit PE (PE32+).
+///
+/// # Arguments
+/// * `module_base` - A pointer to the base address of the module to validate.
+///
+/// # Returns
+/// * `true` if the module is a valid 64-bit PE file, otherwise `false`.
+fn validate_pe(module_base: *mut u8) -> bool {
+    unsafe {
+        let dos_header = module_base as *const IMAGE_DOS_HEADER;
+        if !validate_dos_header(dos_header) {
+            return false;
+        }
+
+        let e_lfanew = (*dos_header).e_lfanew;
+        if !validate_e_lfanew(e_lfanew) {
+            return false;
+        }
+
+        let nt_headers_addr = (module_base as usize).wrapping_add(e_lfanew as usize);
+        let nt_headers = nt_headers_addr as *const IMAGE_NT_HEADERS;
+
+        if !validate_pe_signature(nt_headers) {
+            return false;
+        }
+
+        if !validate_pe64(nt_headers) {
+            return false;
+        }
+
+        true
+    }
+}
 
 /// Validates the DOS header by checking for the "MZ" signature (0x5A4D) at the beginning of a valid PE file.
 ///
@@ -503,6 +550,7 @@ unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
 /// - `false` if the pointer is null or the magic value is incorrect.
 unsafe fn validate_pe64(nt_headers : *const IMAGE_NT_HEADERS) -> bool {
     if nt_headers.is_null(){
+        #[cfg(debug_assertions)]
         println!("Null NT headers");
         return false;
     }
