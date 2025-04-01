@@ -1,5 +1,5 @@
-use std::arch::asm;
-use crate::{helpers};
+use core::arch::asm;
+use crate::{helpers,win_api};
 
 #[repr(C)]
 struct LIST_ENTRY {
@@ -37,12 +37,13 @@ struct PEB_LDR_DATA {
     in_memory_order_module_list: LIST_ENTRY,
 }
 
+
 pub fn get_module_bases() -> (Option<*mut u8>, Option<*mut u8>) {
     let peb = get_peb();
     let ldr = unsafe { (*peb).ldr };
 
     if ldr.is_null() {
-        println!("LDR is null");
+        //println!("LDR is null");
         return (None, None);
     }
 
@@ -53,23 +54,50 @@ pub fn get_module_bases() -> (Option<*mut u8>, Option<*mut u8>) {
     let mut ntdll_base: Option<*mut u8> = None;
     let mut kernelbase_base: Option<*mut u8> = None;
 
+    const NTDLL: &[u16] = &[
+        b'n' as u16,
+        b't' as u16,
+        b'd' as u16,
+        b'l' as u16,
+        b'l' as u16,
+        b'.' as u16,
+        b'd' as u16,
+        b'l' as u16,
+        b'l' as u16,
+        0u16
+    ];
+    const KERNELBASE: &[u16] = &[
+        b'K' as u16,
+        b'E' as u16,
+        b'R' as u16,
+        b'N' as u16,
+        b'E' as u16,
+        b'L' as u16,
+        b'B' as u16,
+        b'A' as u16,
+        b'S' as u16,
+        b'E' as u16,
+        b'.' as u16,
+        b'd' as u16,
+        b'l' as u16,
+        b'l' as u16,
+        0u16
+    ];
+
+
     while !entry.is_null() {
         let ldr_entry = entry as *mut LDR_DATA_TABLE_ENTRY;
         let base = unsafe { (*ldr_entry).dll_base };
         let name_ref = unsafe { &(*ldr_entry).base_dll_name };
 
         if !name_ref.buffer.is_null() {
-            // Konvertera UNICODE_STRING till en Rust-sträng
-            let name_slice = unsafe {
-                core::slice::from_raw_parts(name_ref.buffer, (name_ref.length / 2) as usize)
-            };
 
-            let dll_name = helpers::from_wide(name_slice);
-            println!("Module: {}", dll_name);
-            if dll_name.to_lowercase().contains("kernelbase") {
-                kernelbase_base = Some(base);
-            } else if dll_name.to_lowercase().contains("ntdll") {
+            let name_ptr = name_ref.buffer;
+
+            if unsafe { win_api::lstrcmpiW(name_ptr, NTDLL.as_ptr()) } == 0 {
                 ntdll_base = Some(base);
+            } else if unsafe { win_api::lstrcmpiW(name_ptr, KERNELBASE.as_ptr()) } == 0 {
+                kernelbase_base = Some(base);
             }
         }
         // Gå till nästa post i listan

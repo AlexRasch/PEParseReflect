@@ -29,14 +29,14 @@ pub unsafe fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<
         let export_dir = &(*nt_headers).optional_header.data_directory[0];
         if export_dir.virtual_address == 0 || export_dir.size == 0 {
             #[cfg(debug_assertions)]
-            println!("No export directory found");
+            //println!("No export directory found");
             return None;
         }
 
         let export_table_addr = (module_base as usize).wrapping_add(export_dir.virtual_address as usize);
         if export_table_addr % 4 != 0 {
             #[cfg(debug_assertions)]
-            println!("Misaligned export table address: {:x}", export_table_addr);
+            //println!("Misaligned export table address: {:x}", export_table_addr);
             return None;
         }
         let export_table = export_table_addr as *const IMAGE_EXPORT_DIRECTORY;
@@ -44,7 +44,7 @@ pub unsafe fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<
         let number_of_names = (*export_table).number_of_names;
         if number_of_names == 0 {
             #[cfg(debug_assertions)]
-            println!("No exported names");
+            //println!("No exported names");
             return None;
         }
 
@@ -65,7 +65,7 @@ pub unsafe fn resolve_function(module_base: *mut u8, func_name: &str) -> Option<
             }
         }
     }
-    println!("{} not found", func_name);
+    //println!("{} not found", func_name);
     None
 }
 
@@ -119,7 +119,7 @@ pub unsafe fn validate_pe(module_base: *mut u8) -> bool {
 pub unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
     if dos_header.is_null() {
         #[cfg(debug_assertions)]
-        println!("Null DOS header pointer");
+        //println!("Null DOS header pointer");
         return false;
     }
 
@@ -128,9 +128,10 @@ pub unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
         return true;
     }
 
-    #[cfg(debug_assertions)]
-    println!("Invalid DOS magic");
-    false
+    //#[cfg(debug_assertions)]
+    //println!("Invalid DOS magic");
+
+    return false
 }
 
 /// Validates the e_lfanew field, ensuring it is within a reasonable range and properly aligned for NT headers.
@@ -143,17 +144,17 @@ pub unsafe fn validate_dos_header(dos_header: *const IMAGE_DOS_HEADER) -> bool {
 pub unsafe fn validate_e_lfanew(e_lfanew: i32) -> bool {
     // Se till att e_lfanew är positiv och inom rimligt intervall
     if e_lfanew < 0x40 || e_lfanew > 0x1000 {
-        #[cfg(debug_assertions)]
-        println!("Invalid e_lfanew: {}", e_lfanew);
+        //#[cfg(debug_assertions)]
+        //println!("Invalid e_lfanew: {}", e_lfanew);
         return false;
     }
     // Kontrollera 4-byte alignment
     if e_lfanew % 4 != 0 {
-        #[cfg(debug_assertions)]
-        println!("Misaligned e_lfanew: {}", e_lfanew);
+        //#[cfg(debug_assertions)]
+        //println!("Misaligned e_lfanew: {}", e_lfanew);
         return false;
     }
-    true
+    return true;
 }
 
 /// Validates the PE signature by checking for "PE" (0x4550) to confirm the correct position in the file.
@@ -166,13 +167,13 @@ pub unsafe fn validate_e_lfanew(e_lfanew: i32) -> bool {
 pub unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool {
     if nt_headers.is_null() {
         #[cfg(debug_assertions)]
-        println!("Null NT headers");
+        //println!("Null NT headers");
         return false;
     }
     unsafe {
         if (*nt_headers).signature != 0x4550 {
             #[cfg(debug_assertions)]
-            println!("Invalid PE signature");
+            //println!("Invalid PE signature");
             return false;
         }
     }
@@ -190,7 +191,7 @@ pub unsafe fn validate_pe_signature(nt_headers: *const IMAGE_NT_HEADERS) -> bool
 pub unsafe fn validate_pe64(nt_headers : *const IMAGE_NT_HEADERS) -> bool {
     if nt_headers.is_null(){
         #[cfg(debug_assertions)]
-        println!("Null NT headers");
+        //println!("Null NT headers");
         return false;
     }
     unsafe {

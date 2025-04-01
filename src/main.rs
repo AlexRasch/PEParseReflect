@@ -1,12 +1,14 @@
 #![no_main]
-//#![no_std]
+#![no_std]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use core::panic::PanicInfo;
 use core::ptr;
 
 mod peb_modules;
 mod pe_helper;
 mod helpers;
-
+mod win_api;
 /* --- Hämta LoadLibrary --- */
 
 #[repr(C)]
@@ -105,15 +107,30 @@ struct IMAGE_EXPORT_DIRECTORY {
     address_of_name_ordinals: u32,
 }
 
+/*-- Use LoadLibrary ---*/
+type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
+
+fn call_load_library(load_library_addr: *mut u8, dll_path: &[u8]) -> *mut u8 {
+    unsafe {
+        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
+        load_library(dll_path.as_ptr() as *const i8)
+    }
+}
+
+
 /* --- MessageBoxA --- */
 type MessageBoxA = unsafe extern "system" fn(*mut u8, *const i8, *const i8, u32) -> i32;
 
 fn call_message_box(message_box_addr: *mut u8) {
     unsafe {
         let message_box: MessageBoxA = core::mem::transmute(message_box_addr);
-        let caption = std::ffi::CString::new("Hello").unwrap();
-        let message = std::ffi::CString::new("World").unwrap();
-        message_box(core::ptr::null_mut(), message.as_ptr(), caption.as_ptr(), 0);
+        static CAPTION: &[u8] = b"Hello\0";
+        static MESSAGE: &[u8] = b"World\0";
+        message_box(core::ptr::null_mut(),
+                    MESSAGE.as_ptr() as *const i8,
+                    CAPTION.as_ptr() as *const i8,
+                    0
+        );
     }
 }
 
@@ -139,40 +156,41 @@ pub extern "system" fn WinMain(
         KERNEL_BASE = kernelbase_base.unwrap_or(core::ptr::null_mut());
 
 
+
         // Locate the address of LoadLibraryA within kernelbase.dll
         let load_library = match pe_helper::resolve_function(KERNEL_BASE, "LoadLibraryA") {
             Some(addr) => {
-                println!("LoadLibraryA address: {:?}", addr);
+                //println!("LoadLibraryA address: {:?}", addr);
                 addr
             }
             None => {
-                println!("Failed to find LoadLibraryA");
+                //println!("Failed to find LoadLibraryA");
                 return 0;
             }
         };
 
         // Använd LoadLibraryA för att ladda en DLL (User32 för MessageBoxA)
-        let dll_path = "user32.dll";
+        let dll_path: &[u8] = b"user32.dll\0";
         let dll_handle = call_load_library(load_library, dll_path);
         if !dll_handle.is_null() {
-            println!("Loaded {} at {:?}", dll_path, dll_handle);
+            //println!("Loaded {} at {:?}", dll_path, dll_handle);
         } else {
-            println!("Failed to load {}", dll_path);
+            //println!("Failed to load {}", dll_path);
         }
 
         // Anropar MessageBoxA från user32.dll
         let dll_handle = call_load_library(load_library, dll_path);
         if !dll_handle.is_null() {
-            println!("Dll loaded {} at {:?}", dll_path, dll_handle);
+            //println!("Dll loaded {} at {:?}", dll_path, dll_handle);
 
             // Hitta MessageBoxA
             let message_box = match pe_helper::resolve_function(dll_handle, "MessageBoxA") {
                 Some(addr) => {
-                    println!("MessageBoxA address: {:?}", addr);
+                    //println!("MessageBoxA address: {:?}", addr);
                     addr
                 }
                 None => {
-                    println!("Failed to find MessageBoxA");
+                    //println!("Failed to find MessageBoxA");
                     return 0;
                 }
             };
@@ -182,19 +200,13 @@ pub extern "system" fn WinMain(
 
             return 0;
         } else {
-            println!("Failed to load {}", dll_path);
+            //println!("Failed to load {}", dll_path);
             return 0;
         }
     }
 }
 
-/*-- Use LoadLibrary ---*/
-type LoadLibraryA = unsafe extern "system" fn(*const i8) -> *mut u8;
-
-fn call_load_library(load_library_addr: *mut u8, dll_path: &str) -> *mut u8 {
-    unsafe {
-        let load_library: LoadLibraryA = core::mem::transmute(load_library_addr);
-        let dll_path_c = std::ffi::CString::new(dll_path).unwrap();
-        load_library(dll_path_c.as_ptr())
-    }
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {}
 }
