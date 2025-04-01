@@ -6,6 +6,7 @@ use core::ptr;
 use core::slice;
 
 mod pe_helper;
+mod helpers;
 
 // Strukturer
 #[repr(C)]
@@ -94,7 +95,7 @@ fn get_module_bases() -> (Option<*mut u8>, Option<*mut u8>) {
                 core::slice::from_raw_parts(name_ref.buffer, (name_ref.length / 2) as usize)
             };
 
-            let dll_name = from_wide(name_slice);
+            let dll_name = helpers::from_wide(name_slice);
             println!("Module: {}", dll_name);
             if dll_name.to_lowercase().contains("kernelbase") {
                 kernelbase_base = Some(base);
@@ -299,9 +300,4 @@ fn call_load_library(load_library_addr: *mut u8, dll_path: &str) -> *mut u8 {
         let dll_path_c = std::ffi::CString::new(dll_path).unwrap();
         load_library(dll_path_c.as_ptr())
     }
-}
-
-/* --- Helpers ---*/
-fn from_wide(slice: &[u16]) -> String {
-    String::from_utf16(slice).unwrap_or_default()
 }
